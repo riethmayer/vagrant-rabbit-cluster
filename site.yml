@@ -1,0 +1,51 @@
+---
+- name: Rabbit cluster
+  sudo: yes
+  hosts:
+    - rabbit_1
+    - rabbit_2
+    - rabbit_3
+  vars:
+    rabbit_nodes:
+      - { "ip": "192.168.35.121", "host": "rabbit-1" }
+      - { "ip": "192.168.35.122", "host": "rabbit-2" }
+      - { "ip": "192.168.35.123", "host": "rabbit-3" }
+  tasks:
+    - lineinfile: dest=/etc/hosts regexp="^{{ item.ip }}" line="{{ item.ip }} {{ item.host }}"
+      with_items: rabbit_nodes
+    - apt: name=rabbitmq-server
+    - copy:
+        dest: /etc/rabbitmq/enabled_plugins
+        content: "[rabbitmq_management].\n"
+      notify: "restart rabbit"
+    - copy:
+        dest: /var/lib/rabbitmq/.erlang.cookie
+        owner: rabbitmq
+        mode: 0400
+        content: 'abcdef'
+      notify: "hard restart rabbit"
+  handlers:
+    - name: "hard restart rabbit"
+      shell: "(killall -TERM beam || killall -TERM beam.smp) && /etc/init.d/rabbitmq-server start"
+    - name: "restart rabbit"
+      service: name=rabbitmq-server state=restarted
+- name: Build cluster
+  hosts:
+    - rabbit_2
+    - rabbit_3
+  sudo: yes
+  tasks:
+    - shell: "rabbitmqctl stop_app"
+    - shell: "rabbitmqctl join_cluster rabbit@rabbit-1"
+    - shell: "rabbitmqctl start_app"
+- name: ELB
+  hosts: rabbit_elb
+  sudo: yes
+  tasks:
+    - apt: name=haproxy
+    - lineinfile: dest=/etc/default/haproxy regexp="ENABLED=" line="ENABLED=1"
+    - copy: src=elb.conf dest=/etc/haproxy/haproxy.cfg
+      notify: "restart haproxy"
+  handlers:
+    - name: "restart haproxy"
+      service: name=haproxy state=restarted enabled=yes
